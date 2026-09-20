@@ -22,6 +22,8 @@
 # SOFTWARE.
 #
 
+set -Eeuo pipefail
+
 # Give everything time to initialize for preventing SteamCMD deadlock
 sleep 1
 
@@ -30,7 +32,8 @@ TZ=${TZ:-UTC}
 export TZ
 
 # Set environment variable that holds the Internal Docker IP
-INTERNAL_IP=$(ip route get 1 | awk '{print $(NF-2);exit}')
+INTERNAL_IP=$(ip route get 1 2>/dev/null | awk '{print $(NF-2); exit}')
+INTERNAL_IP=${INTERNAL_IP:-127.0.0.1}
 export INTERNAL_IP
 
 # Switch to the container's working directory
@@ -39,34 +42,65 @@ cd /home/container || exit 1
 # Convert all of the "{{VARIABLE}}" parts of the command into the expected shell
 # variable format of "${VARIABLE}" before evaluating the string and automatically
 # replacing the values.
-PARSED=$(echo "${STARTUP}" | sed -e 's/{{/${/g' -e 's/}}/}/g' | eval echo "$(cat -)")
+PARSED=$(printf '%s' "${STARTUP:?STARTUP is not set}" | sed -e 's/{{/${/g' -e 's/}}/}/g' | eval echo "$(cat -)")
 
 ## just in case someone removed the defaults.
-if [ "${STEAM_USER}" == "" ]; then
-    echo -e "steam user is not set.\n"
-    echo -e "Using anonymous user.\n"
+if [[ -z "${STEAM_USER:-}" ]]; then
+    echo "Steam user is not set; using anonymous login."
     STEAM_USER=anonymous
     STEAM_PASS=""
     STEAM_AUTH=""
 else
-    echo -e "user set to ${STEAM_USER}"
+    echo "Steam user is set to ${STEAM_USER}."
 fi
 
-## if auto_update is not set or to 1 update
-if [ -z ${AUTO_UPDATE} ] || [ "${AUTO_UPDATE}" == "1" ]; then
-    # Update Source Server
-    if [ ! -z ${SRCDS_APPID} ]; then
-        ./steamcmd/steamcmd.sh +force_install_dir /home/container +login ${STEAM_USER} ${STEAM_PASS} ${STEAM_AUTH} +app_update ${SRCDS_APPID} $( [[ -z ${SRCDS_BETAID} ]] || printf %s "-beta ${SRCDS_BETAID}" ) $( [[ -z ${SRCDS_BETAPASS} ]] || printf %s "-betapassword ${SRCDS_BETAPASS}" ) $( [[ -z ${HLDS_GAME} ]] || printf %s "+app_set_config 90 mod ${HLDS_GAME}" ) $( [[ -z ${VALIDATE} ]] || printf %s "validate" ) +quit
-    else
-        echo -e "No appid set. Starting Server"
+# Update optional server content without persisting credentials in .git/config.
+if [[ "${AUTO_GIT_UPDATE:-0}" == "1" ]]; then
+    git_folder=${GIT_FOLDER:-garrysmod}
+    if [[ "${git_folder}" = /* || "${git_folder}" == *..* ]]; then
+        echo "GIT_FOLDER must be a relative path without '..'." >&2
+        exit 1
     fi
 
+    if [[ -d "${git_folder}/.git" ]]; then
+        git_args=(-C "${git_folder}")
+        if [[ -n "${USERNAME:-}" && -n "${ACCESS_TOKEN:-}" ]]; then
+            git_auth=$(printf '%s' "${USERNAME}:${ACCESS_TOKEN}" | base64 -w 0)
+            git_args=(-c "http.extraHeader=Authorization: Basic ${git_auth}" "${git_args[@]}")
+        fi
+
+        git "${git_args[@]}" fetch --depth=1 origin "${BRANCH:-HEAD}"
+        git "${git_args[@]}" merge --ff-only FETCH_HEAD
+        unset git_auth 2>/dev/null || true
+    else
+        echo "No Git repository found in ${git_folder}; skipping repository update."
+    fi
+fi
+
+# Update the game unless explicitly disabled.
+if [[ "${AUTO_UPDATE:-1}" == "1" ]]; then
+    if [[ -n "${SRCDS_APPID:-}" ]]; then
+        steamcmd_args=(
+            +force_install_dir /home/container
+            +login "${STEAM_USER}" "${STEAM_PASS:-}" "${STEAM_AUTH:-}"
+            +app_update "${SRCDS_APPID}"
+        )
+
+        [[ -z "${SRCDS_BETAID:-}" ]] || steamcmd_args+=(-beta "${SRCDS_BETAID}")
+        [[ -z "${SRCDS_BETAPASS:-}" ]] || steamcmd_args+=(-betapassword "${SRCDS_BETAPASS}")
+        [[ -z "${HLDS_GAME:-}" ]] || steamcmd_args+=(+app_set_config 90 mod "${HLDS_GAME}")
+        [[ -z "${VALIDATE:-}" ]] || steamcmd_args+=(validate)
+        steamcmd_args+=(+quit)
+
+        ./steamcmd/steamcmd.sh "${steamcmd_args[@]}"
+    else
+        echo "No AppID is set; skipping the game update."
+    fi
 else
-    echo -e "Not updating game server as auto update was set to 0. Starting Server"
+    echo "Automatic game updates are disabled."
 fi
 
 # Display the command we're running in the output, and then execute it with the env
 # from the container itself.
-printf "\033[1m\033[33mcontainer@refoselteamwork~ \033[0m%s\n" "$PARSED"
-# shellcheck disable=SC2086
-exec env ${PARSED}
+printf "\033[1m\033[33mcontainer@refoseldev~ \033[0m%s\n" "$PARSED"
+exec /bin/bash -c "${PARSED}"
