@@ -56,7 +56,7 @@ fi
 
 # Update optional server content without persisting credentials in .git/config.
 if [[ "${AUTO_GIT_UPDATE:-0}" == "1" ]]; then
-    git_folder=${GIT_FOLDER:-garrysmod}
+    git_folder=${GIT_FOLDER:-.}
     if [[ "${git_folder}" = /* || "${git_folder}" == *..* ]]; then
         echo "GIT_FOLDER must be a relative path without '..'." >&2
         exit 1
