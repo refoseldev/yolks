@@ -84,8 +84,8 @@ if [[ "${AUTO_GIT_UPDATE:-0}" == "1" ]]; then
 
         if [[ -n "${git_folder}" ]]; then
             if git "${git_args[@]}" fetch --depth=1 origin "${BRANCH:-HEAD}"; then
-                git "${git_args[@]}" merge --ff-only FETCH_HEAD || \
-                    echo "Git update is not a fast-forward; keeping the current server files."
+                git "${git_args[@]}" reset --hard FETCH_HEAD || \
+                    echo "Git checkout failed; keeping the current server files."
             else
                 echo "Git fetch failed; keeping the current server files."
             fi
