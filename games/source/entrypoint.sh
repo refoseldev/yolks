@@ -63,14 +63,33 @@ if [[ "${AUTO_GIT_UPDATE:-0}" == "1" ]]; then
     fi
 
     if [[ -d "${git_folder}/.git" ]]; then
+        git_address=${GIT_ADDRESS:-}
+        if [[ -n "${git_address}" ]]; then
+            [[ "${git_address}" == *.git ]] || git_address="${git_address}.git"
+            if git -C "${git_folder}" remote get-url origin >/dev/null 2>&1; then
+                git -C "${git_folder}" remote set-url origin "${git_address}"
+            else
+                git -C "${git_folder}" remote add origin "${git_address}"
+            fi
+        elif ! git -C "${git_folder}" remote get-url origin >/dev/null 2>&1; then
+            echo "Git repository in ${git_folder} has no origin and GIT_ADDRESS is empty; skipping repository update."
+            git_folder=
+        fi
+
         git_args=(-C "${git_folder}")
         if [[ -n "${USERNAME:-}" && -n "${ACCESS_TOKEN:-}" ]]; then
             git_auth=$(printf '%s' "${USERNAME}:${ACCESS_TOKEN}" | base64 -w 0)
             git_args=(-c "http.extraHeader=Authorization: Basic ${git_auth}" "${git_args[@]}")
         fi
 
-        git "${git_args[@]}" fetch --depth=1 origin "${BRANCH:-HEAD}"
-        git "${git_args[@]}" merge --ff-only FETCH_HEAD
+        if [[ -n "${git_folder}" ]]; then
+            if git "${git_args[@]}" fetch --depth=1 origin "${BRANCH:-HEAD}"; then
+                git "${git_args[@]}" merge --ff-only FETCH_HEAD || \
+                    echo "Git update is not a fast-forward; keeping the current server files."
+            else
+                echo "Git fetch failed; keeping the current server files."
+            fi
+        fi
         unset git_auth 2>/dev/null || true
     else
         echo "No Git repository found in ${git_folder}; skipping repository update."
